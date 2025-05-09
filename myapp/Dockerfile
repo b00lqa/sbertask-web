@@ -1,47 +1,46 @@
-# Build stage
-FROM python:3.11-slim AS builder
+FROM python:3.12-alpine AS builder
 
-# Set working directory
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk update && \
+    apk add --no-cache \
+        build-base \
+        postgresql-client \
+        libffi-dev \
+    && rm -rf /var/cache/apk/*
 
-# Install Python dependencies
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# Final stage
-FROM python:3.11-slim
-
-# Create non-root user
-RUN useradd -m -r appuser && \
-    mkdir /app && \
-    chown appuser:appuser /app
-
-# Set working directory
-WORKDIR /app
-
-# Copy wheels from builder
-COPY --from=builder /app/wheels /wheels
-COPY --from=builder /app/requirements.txt .
-
-# Install dependencies
-RUN pip install --no-cache /wheels/*
-
-# Copy project files
 COPY . .
 
-# Change ownership of application files
-RUN chown -R appuser:appuser /app
+###################################################################
+FROM python:3.12-alpine
 
-# Switch to non-root user
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/usr/local/lib/python3.12/site-packages:$PYTHONPATH \
+    PATH=/usr/local/bin:$PATH
+
+RUN apk update && \
+    apk add --no-cache \
+        postgresql-libs \
+    && rm -rf /var/cache/apk/*
+
+WORKDIR /app
+
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+COPY --from=builder --chown=appuser:appgroup /install/lib/python3.12/site-packages/ /usr/local/lib/python3.12/site-packages/
+COPY --from=builder --chown=appuser:appgroup /install/bin/ /usr/local/bin/
+
+COPY --from=builder --chown=appuser:appgroup /app /app
+
+RUN chown -R appuser:appgroup /app
+
 USER appuser
 
-# Expose port
-EXPOSE 8000
-
-# Run application
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
